@@ -1,4 +1,4 @@
-package main
+package linux
 
 import (
 	"debug/elf"
@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/gookit/color"
 )
 
 const (
@@ -21,6 +23,13 @@ const (
 	ColorWhite  = "\033[37m"
 	ColorReset  = "\033[0m"
 	ColorBold   = "\033[1m"
+)
+
+var (
+	successStyle = color.New(color.Green, color.OpBold)
+	dangerStyle  = color.New(color.Red, color.OpBold)
+	warningStyle = color.New(color.Yellow, color.OpBold)
+	headerStyle  = color.New(color.Cyan, color.OpBold)
 )
 
 var syscalls = map[int]string{
@@ -95,46 +104,6 @@ type MaliciousFinding struct {
 }
 
 var maliciousFindings []MaliciousFinding
-
-func printGreen(format string, a ...interface{}) {
-	fmt.Printf(ColorGreen+format+ColorReset, a...)
-}
-
-func printRed(format string, a ...interface{}) {
-	fmt.Printf(ColorRed+format+ColorReset, a...)
-}
-
-func printYellow(format string, a ...interface{}) {
-	fmt.Printf(ColorYellow+format+ColorReset, a...)
-}
-
-func printBlue(format string, a ...interface{}) {
-	fmt.Printf(ColorBlue+format+ColorReset, a...)
-}
-
-func printCyan(format string, a ...interface{}) {
-	fmt.Printf(ColorCyan+format+ColorReset, a...)
-}
-
-func printBold(format string, a ...interface{}) {
-	fmt.Printf(ColorBold+format+ColorReset, a...)
-}
-
-func printHeader(format string, a ...interface{}) {
-	fmt.Printf(ColorBold+ColorCyan+format+ColorReset, a...)
-}
-
-func printWarning(format string, a ...interface{}) {
-	fmt.Printf(ColorBold+ColorYellow+format+ColorReset, a...)
-}
-
-func printDanger(format string, a ...interface{}) {
-	fmt.Printf(ColorBold+ColorRed+format+ColorReset, a...)
-}
-
-func printSuccess(format string, a ...interface{}) {
-	fmt.Printf(ColorBold+ColorGreen+format+ColorReset, a...)
-}
 
 func readKernelSymbols() ([]KernelSymbol, error) {
 	data, err := os.ReadFile("/proc/kallsyms")
@@ -400,44 +369,45 @@ func readKernelMemory(addr uint64, size int) ([]byte, error) {
 }
 
 func analyzeSyscallHooks() error {
-	printHeader("[+] Reading kernel symbols...\n")
+	headerStyle.Printf("[+] Reading kernel symbols...\n")
 	symbols, err := readKernelSymbols()
 	if err != nil {
 		return err
 	}
 
-	printHeader("[+] Getting loaded modules...\n")
+	headerStyle.Printf("[+] Getting loaded modules...\n")
 	modules, err := getLoadedModules()
 	if err != nil {
-		printWarning("[-] Warning: Could not get module info: %v\n", err)
+		warningStyle.Printf("[-] Warning: Could not get module info: %v\n", err)
 	}
 
 	kernelBase, err := getKernelBase()
 	if err != nil {
 		return err
 	}
-	printSuccess("[+] Kernel base: 0x%016x\n", kernelBase)
+
+	successStyle.Printf("[+] Kernel base: 0x%016x\n", kernelBase)
 
 	textStart, textEnd, err := getKernelTextRange()
 	if err != nil {
-		printWarning("[-] Warning: Could not get kernel text range: %v\n", err)
+		warningStyle.Printf("[-] Warning: Could not get kernel text range: %v\n", err)
 	} else {
-		printSuccess("[+] Kernel text: 0x%016x - 0x%016x\n", textStart, textEnd)
+		successStyle.Printf("[+] Kernel text: 0x%016x - 0x%016x\n", textStart, textEnd)
 	}
 
 	syscallTableAddr, err := getSysCallTableAddress()
 	if err != nil {
 		return err
 	}
-	printSuccess("[+] sys_call_table @ 0x%016x\n", syscallTableAddr)
+	successStyle.Printf("[+] sys_call_table @ 0x%016x\n", syscallTableAddr)
 
 	tableData, err := readKernelMemory(syscallTableAddr, 512*8)
 	if err != nil {
 		return fmt.Errorf("failed to read sys_call_table: %v", err)
 	}
 
-	printHeader("\n[+] Analyzing system call table for hooks...\n")
-	printHeader("=============================================\n")
+	headerStyle.Printf("\n[+] Analyzing system call table for hooks...\n")
+	headerStyle.Printf("=============================================\n")
 
 	suspiciousCount := 0
 	highlySuspiciousCount := 0
@@ -472,17 +442,17 @@ func analyzeSyscallHooks() error {
 		if isInKernelText || symbol != nil || inModule {
 			validCount++
 			if symbol != nil {
-				printGreen("[✓] %s -> 0x%016x (%s)\n", syscallName, syscallAddr, symbol.Name)
+				color.Greenf("[✓] %s -> 0x%016x (%s)\n", syscallName, syscallAddr, symbol.Name)
 			} else if inModule {
-				printGreen("[✓] %s -> 0x%016x (module: %s)\n", syscallName, syscallAddr, moduleName)
+				color.Greenf("[✓] %s -> 0x%016x (module: %s)\n", syscallName, syscallAddr, moduleName)
 			} else {
-				printGreen("[✓] %s -> 0x%016x (kernel text)\n", syscallName, syscallAddr)
+				color.Greenf("[✓] %s -> 0x%016x (kernel text)\n", syscallName, syscallAddr)
 			}
 		} else {
 
 			if isHighlySuspicious(syscallAddr) {
 				highlySuspiciousCount++
-				printDanger("[!] HIGHLY SUSPICIOUS/MALICIOUS: %s -> 0x%016x\n", syscallName, syscallAddr)
+				dangerStyle.Printf("[!] HIGHLY SUSPICIOUS/MALICIOUS: %s -> 0x%016x\n", syscallName, syscallAddr)
 
 				maliciousFindings = append(maliciousFindings, MaliciousFinding{
 					SyscallNumber: syscallNum,
@@ -494,7 +464,7 @@ func analyzeSyscallHooks() error {
 				})
 			} else {
 				suspiciousCount++
-				printYellow("[!] SUSPICIOUS: %s -> 0x%016x\n", syscallName, syscallAddr)
+				color.Yellowf("[!] SUSPICIOUS: %s -> 0x%016x\n", syscallName, syscallAddr)
 
 				maliciousFindings = append(maliciousFindings, MaliciousFinding{
 					SyscallNumber: syscallNum,
@@ -506,28 +476,28 @@ func analyzeSyscallHooks() error {
 				})
 			}
 
-			printBlue("    Nearby symbols:\n")
+			color.Bluef("    Nearby symbols:\n")
 			foundNearby := false
 			for _, sym := range symbols {
 				if sym.Address > syscallAddr && sym.Address < syscallAddr+0x1000 {
-					printCyan("      +0x%04x: %s %s\n", sym.Address-syscallAddr, sym.Type, sym.Name)
+					color.Cyanf("      +0x%04x: %s %s\n", sym.Address-syscallAddr, sym.Type, sym.Name)
 					foundNearby = true
 				}
 			}
 			if !foundNearby {
-				printYellow("      No nearby symbols found\n")
+				color.Yellowf("      No nearby symbols found\n")
 			}
 			fmt.Println()
 		}
 	}
 
-	printHeader("\n[+] Analysis complete:\n")
-	printSuccess("    Valid entries: %d\n", validCount)
+	headerStyle.Printf("\n[+] Analysis complete:\n")
+	successStyle.Printf("    Valid entries: %d\n", validCount)
 	if suspiciousCount > 0 {
-		printWarning("    Suspicious entries: %d\n", suspiciousCount)
+		warningStyle.Printf("    Suspicious entries: %d\n", suspiciousCount)
 	}
 	if highlySuspiciousCount > 0 {
-		printDanger("    HIGHLY SUSPICIOUS/MALICIOUS entries: %d\n", highlySuspiciousCount)
+		dangerStyle.Printf("    HIGHLY SUSPICIOUS/MALICIOUS entries: %d\n", highlySuspiciousCount)
 	}
 
 	return nil
@@ -539,20 +509,20 @@ func isClamAVInstalled() bool {
 }
 
 func updateClamAV() error {
-	printHeader("[+] Updating ClamAV virus definitions...\n")
+	headerStyle.Printf("[+] Updating ClamAV virus definitions...\n")
 
 	if _, err := exec.LookPath("freshclam"); err == nil {
 		cmd := exec.Command("freshclam")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			printWarning("[-] freshclam failed: %v\n", err)
-			printWarning("    Continuing with existing definitions...\n")
+			warningStyle.Printf("[-] freshclam failed: %v\n", err)
+			warningStyle.Printf("    Continuing with existing definitions...\n")
 		} else {
-			printSuccess("[+] ClamAV definitions updated successfully\n")
+			successStyle.Printf("[+] ClamAV definitions updated successfully\n")
 		}
 	} else {
-		printWarning("[-] freshclam not found, using existing definitions\n")
+		warningStyle.Printf("[-] freshclam not found, using existing definitions\n")
 	}
 	return nil
 }
@@ -584,17 +554,17 @@ func scanMaliciousPaths() {
 		return
 	}
 
-	printHeader("\n[+] Scanning malicious paths with ClamAV\n")
-	printHeader("======================================\n")
+	headerStyle.Printf("\n[+] Scanning malicious paths with ClamAV\n")
+	headerStyle.Printf("======================================\n")
 
 	if !isClamAVInstalled() {
-		printDanger("[-] ClamAV is not installed. Cannot scan for malware.\n")
-		printWarning("[!] Install ClamAV with: sudo apt-get install clamav clamav-daemon\n")
+		dangerStyle.Printf("[-] ClamAV is not installed. Cannot scan for malware.\n")
+		warningStyle.Printf("[!] Install ClamAV with: sudo apt-get install clamav clamav-daemon\n")
 		return
 	}
 
 	if err := updateClamAV(); err != nil {
-		printWarning("[-] Failed to update ClamAV definitions: %v\n", err)
+		warningStyle.Printf("[-] Failed to update ClamAV definitions: %v\n", err)
 	}
 
 	pathsToScan := make(map[string]bool)
@@ -622,44 +592,44 @@ func scanMaliciousPaths() {
 	virusFound := false
 
 	for path := range pathsToScan {
-		printCyan("[SCANNING] %s\n", path)
+		color.Cyanf("[SCANNING] %s\n", path)
 
 		infected, output, err := scanWithClamAV(path)
 		if err != nil {
-			printWarning("    Scan failed: %v\n", err)
+			warningStyle.Printf("    Scan failed: %v\n", err)
 			continue
 		}
 
 		if infected {
 			virusFound = true
-			printDanger("    🚨 MALWARE DETECTED in %s\n", path)
-			printDanger("    %s\n", strings.TrimSpace(output))
+			dangerStyle.Printf("    🚨 MALWARE DETECTED in %s\n", path)
+			dangerStyle.Printf("    %s\n", strings.TrimSpace(output))
 
-			printDanger("    [ACTION REQUIRED] Remove infected file:\n")
-			printDanger("        sudo rm -f %s\n", path)
-			printDanger("        sudo rmmod %s (if module is loaded)\n", filepath.Base(path))
+			dangerStyle.Printf("    [ACTION REQUIRED] Remove infected file:\n")
+			dangerStyle.Printf("        sudo rm -f %s\n", path)
+			dangerStyle.Printf("        sudo rmmod %s (if module is loaded)\n", filepath.Base(path))
 		} else {
-			printGreen("    [CLEAN] No malware found\n")
+			color.Greenf("    [CLEAN] No malware found\n")
 		}
 	}
 
 	if virusFound {
-		printDanger("\n🚨 CRITICAL: Malware detected in system files!\n")
-		printDanger("   Immediate action required to clean the system.\n")
+		dangerStyle.Printf("\n🚨 CRITICAL: Malware detected in system files!\n")
+		dangerStyle.Printf("   Immediate action required to clean the system.\n")
 	} else {
-		printSuccess("\n[✓] No malware detected by ClamAV\n")
+		successStyle.Printf("\n[✓] No malware detected by ClamAV\n")
 	}
 }
 
 func scanFullSystem() {
-	printHeader("\n[+] Performing full system scan with ClamAV\n")
-	printHeader("=========================================\n")
+	headerStyle.Printf("\n[+] Performing full system scan with ClamAV\n")
+	headerStyle.Printf("=========================================\n")
 
 	if !isClamAVInstalled() {
 		return
 	}
 
-	printWarning("[!] Full system scan may take a long time...\n")
+	warningStyle.Printf("[!] Full system scan may take a long time...\n")
 
 	cmd := exec.Command("clamscan", "--infected", "--recursive", "/")
 	cmd.Stdout = os.Stdout
@@ -669,26 +639,26 @@ func scanFullSystem() {
 		err := cmd.Run()
 		if err != nil {
 			if cmd.ProcessState.ExitCode() == 1 {
-				printDanger("\n[!] Viruses found during full system scan!\n")
+				dangerStyle.Printf("\n[!] Viruses found during full system scan!\n")
 			} else {
-				printWarning("\n[-] Full system scan completed with errors: %v\n", err)
+				warningStyle.Printf("\n[-] Full system scan completed with errors: %v\n", err)
 			}
 		} else {
-			printSuccess("\n[✓] Full system scan completed - no viruses found\n")
+			successStyle.Printf("\n[✓] Full system scan completed - no viruses found\n")
 		}
 	}()
 
-	printCyan("Full system scan started in background...\n")
-	printCyan("Check system logs or run 'clamscan --recursive /' for detailed results.\n")
+	color.Cyanf("Full system scan started in background...\n")
+	color.Cyanf("Check system logs or run 'clamscan --recursive /' for detailed results.\n")
 }
 
 func analyzeSuspiciousCalls() {
-	printHeader("\n[+] Deep analysis of suspicious syscalls\n")
-	printHeader("========================================\n")
+	headerStyle.Printf("\n[+] Deep analysis of suspicious syscalls\n")
+	headerStyle.Printf("========================================\n")
 
 	symbols, err := readKernelSymbols()
 	if err != nil {
-		printDanger("Error reading symbols: %v\n", err)
+		dangerStyle.Printf("Error reading symbols: %v\n", err)
 		return
 	}
 
@@ -700,51 +670,51 @@ func analyzeSuspiciousCalls() {
 
 	for _, addr := range suspiciousAddrs {
 		if isHighlySuspicious(addr) {
-			printDanger("\nAnalyzing HIGHLY SUSPICIOUS address: 0x%016x\n", addr)
+			dangerStyle.Printf("\nAnalyzing HIGHLY SUSPICIOUS address: 0x%016x\n", addr)
 		} else {
-			printWarning("\nAnalyzing suspicious address: 0x%016x\n", addr)
+			warningStyle.Printf("\nAnalyzing suspicious address: 0x%016x\n", addr)
 		}
 		analyzeAddress(addr, symbols)
 	}
 }
 
 func analyzeAddress(addr uint64, symbols []KernelSymbol) {
-	printBlue("  Memory page analysis:\n")
+	color.Bluef("  Memory page analysis:\n")
 
 	data, err := readKernelMemory(addr & ^uint64(0xfff), 4096)
 	if err != nil {
-		printYellow("  Cannot read memory: %v\n", err)
+		color.Yellowf("  Cannot read memory: %v\n", err)
 	} else {
 		if isLikelyCode(data) {
-			printGreen("  Contains executable code patterns\n")
+			color.Greenf("  Contains executable code patterns\n")
 		} else {
-			printYellow("  Does not appear to be executable code\n")
+			color.Yellowf("  Does not appear to be executable code\n")
 		}
 	}
 
-	printBlue("  Closest symbols:\n")
+	color.Bluef("  Closest symbols:\n")
 	found := false
 	for _, sym := range symbols {
 		if sym.Address <= addr && sym.Address >= addr-0x1000 {
 			offset := addr - sym.Address
-			printCyan("    +0x%04x: %s %s\n", offset, sym.Type, sym.Name)
+			color.Cyanf("    +0x%04x: %s %s\n", offset, sym.Type, sym.Name)
 			found = true
 		}
 	}
 	if !found {
-		printYellow("    No symbols found in vicinity\n")
+		color.Yellowf("    No symbols found in vicinity\n")
 	}
 
 	modules, _ := getLoadedModules()
 	for _, mod := range modules {
 		if addr >= mod.Address && addr < mod.Address+mod.Size {
-			printGreen("  Located in module: %s (0x%016x-0x%016x)\n",
+			color.Greenf("  Located in module: %s (0x%016x-0x%016x)\n",
 				mod.Name, mod.Address, mod.Address+mod.Size)
-			printCyan("  Module path: %s\n", mod.Path)
+			color.Cyanf("  Module path: %s\n", mod.Path)
 			return
 		}
 	}
-	printRed("  Not in any known module - HIGH SUSPICION!\n")
+	color.Redf("  Not in any known module - HIGH SUSPICION!\n")
 }
 
 func isLikelyCode(data []byte) bool {
@@ -764,20 +734,20 @@ func isLikelyCode(data []byte) bool {
 }
 
 func checkBPFPrograms() {
-	printHeader("\n[+] Checking for BPF programs\n")
-	printHeader("============================\n")
+	headerStyle.Printf("\n[+] Checking for BPF programs\n")
+	headerStyle.Printf("============================\n")
 
 	if _, err := os.Stat("/sys/fs/bpf"); err == nil {
-		printGreen("BPF filesystem mounted\n")
+		color.Greenf("BPF filesystem mounted\n")
 
 		if output, err := execCommand("bpftool", "prog", "list"); err == nil {
-			printGreen("BPF programs:\n")
+			color.Greenf("BPF programs:\n")
 			fmt.Println(output)
 		} else {
-			printYellow("bpftool not available or no BPF programs\n")
+			color.Yellowf("bpftool not available or no BPF programs\n")
 		}
 	} else {
-		printYellow("BPF filesystem not mounted\n")
+		color.Yellowf("BPF filesystem not mounted\n")
 	}
 }
 
@@ -791,47 +761,79 @@ func execCommand(name string, args ...string) (string, error) {
 }
 
 func checkSystemInfo() {
-	printHeader("\n[+] System Information\n")
-	printHeader("=====================\n")
+	headerStyle.Printf("\n[+] System Information\n")
+	headerStyle.Printf("=====================\n")
 
 	if info, err := os.ReadFile("/proc/version"); err == nil {
-		printCyan("Kernel: %s", info)
+		color.Cyanf("Kernel: %s", info)
 	}
 
 	if data, err := os.ReadFile("/sys/kernel/security/lsm"); err == nil {
-		printCyan("Security modules: %s", data)
+		color.Cyanf("Security modules: %s", data)
 	}
 
-	printHeader("\n[+] Loaded Kernel Modules:\n")
+	headerStyle.Printf("\n[+] Loaded Kernel Modules:\n")
 	if modules, err := getLoadedModules(); err == nil {
 		for _, mod := range modules {
-			printCyan("  %s: 0x%016x (size: %d)\n", mod.Name, mod.Address, mod.Size)
+			color.Cyanf("  %s: 0x%016x (size: %d)\n", mod.Name, mod.Address, mod.Size)
 			if mod.Path != "" {
-				printCyan("    Path: %s\n", mod.Path)
+				color.Cyanf("    Path: %s\n", mod.Path)
 			}
 		}
 	}
 }
 
 func runSecurityChecks() {
-	printHeader("\n[+] Running Security Checks\n")
-	printHeader("===========================\n")
+	headerStyle.Printf("\n[+] Running Security Checks\n")
+	headerStyle.Printf("===========================\n")
 
 	if _, err := os.Stat("/sys/kernel/debug/kprobes"); err == nil {
 		if data, err := os.ReadFile("/sys/kernel/debug/kprobes/list"); err == nil {
-			printCyan("Active kprobes:\n")
+			color.Cyanf("Active kprobes:\n")
 			fmt.Println(string(data))
 		}
 	}
 
 	if _, err := os.Stat("/sys/kernel/livepatch"); err == nil {
-		printCyan("Livepatch directory exists - checking for patches...\n")
+		color.Cyanf("Livepatch directory exists - checking for patches...\n")
 		if files, err := os.ReadDir("/sys/kernel/livepatch"); err == nil {
 			for _, file := range files {
 				if file.IsDir() {
-					printCyan("  Livepatch: %s\n", file.Name())
+					color.Cyanf("  Livepatch: %s\n", file.Name())
 				}
 			}
 		}
+	}
+}
+
+func RunScanner() {
+
+	if err := analyzeSyscallHooks(); err != nil {
+		dangerStyle.Printf("[-] Error: %v\n", err)
+	}
+
+	analyzeSuspiciousCalls()
+	checkBPFPrograms()
+	checkSystemInfo()
+	runSecurityChecks()
+
+	scanMaliciousPaths()
+
+	headerStyle.Printf("\n[+] Optional: Full System Scan\n")
+	headerStyle.Printf("=============================\n")
+	warningStyle.Printf("Do you want to perform a full system scan with ClamAV? (y/N): ")
+
+	var response string
+	fmt.Scanln(&response)
+
+	if strings.ToLower(response) == "y" || strings.ToLower(response) == "yes" {
+		scanFullSystem()
+	}
+
+	successStyle.Printf("\n[+] All checks completed\n")
+
+	if len(maliciousFindings) > 0 {
+		dangerStyle.Printf("\n🚨 SECURITY WARNING: Suspicious system call hooks detected!\n")
+		dangerStyle.Printf("   Review the findings above and take appropriate action.\n")
 	}
 }
